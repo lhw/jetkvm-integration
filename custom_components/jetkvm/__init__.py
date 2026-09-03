@@ -36,8 +36,9 @@ async def async_setup(hass: HomeAssistant, config: dict | None = None) -> bool:
     return True
 
 
-async def _service_send_keys(hass: HomeAssistant, call: ServiceCall) -> None:
+async def _service_send_keys(call: ServiceCall) -> None:
     """Send a list of HID keys (named or decimal codes) to every JetKVM entry."""
+    hass = call.hass
     keys = call.data["keys"]
     modifier = call.data["modifier"]
     delay = call.data["delay"]
