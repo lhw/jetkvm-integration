@@ -1,0 +1,59 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "JetKVM device",
+        "description": "Enter the JetKVM address and password. Complements native MQTT mode with screen + keyboard.",
+        "data": {
+          "host": "Device URL",
+          "password": "Password",
+          "wol_mac": "Wake-on-LAN MAC (optional)",
+          "scan_interval": "Polling interval (seconds)"
+        },
+        "data_description": {
+          "host": "Base URL, e.g. http://192.168.1.168",
+          "password": "Local password set on the JetKVM",
+          "wol_mac": "Optional MAC for the Wake host button, e.g. AA:BB:CC:DD:EE:FF",
+          "scan_interval": "How often to poll /device, in seconds (minimum 10)."
+        }
+      },
+      "discovery_confirm": {
+        "title": "JetKVM found",
+        "description": "Discovered {host} via MQTT. Enter the device password to add screen + keyboard.",
+        "data": {
+          "password": "Password"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Failed to connect",
+      "invalid": "Invalid URL",
+      "invalid_auth": "Invalid password",
+      "unknown": "Unexpected error"
+    },
+    "abort": {
+      "unique_already_configured": "This JetKVM is already configured",
+      "invalid_discovery_info": "Not a JetKVM discovery message"
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "JetKVM options",
+        "description": "Adjust password, Wake-on-LAN MAC and polling interval.",
+        "data": {
+          "host": "Device URL",
+          "password": "Password",
+          "wol_mac": "Wake-on-LAN MAC (optional)",
+          "scan_interval": "Polling interval (seconds)"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Failed to connect",
+      "invalid": "Invalid URL",
+      "invalid_auth": "Invalid password",
+      "unknown": "Unexpected error"
+    }
+  }
+}

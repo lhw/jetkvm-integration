@@ -1,0 +1,14 @@
+{
+  "domain": "jetkvm",
+  "name": "JetKVM",
+  "codeowners": ["@lhw"],
+  "config_flow": true,
+  "documentation": "https://github.com/lhw/jetkvm-integration",
+  "issue_tracker": "https://github.com/lhw/jetkvm-integration/issues",
+  "iot_class": "local_polling",
+  "loggers": ["jetkvm"],
+  "requirements": ["aiortc==1.15.0"],
+  "dependencies": ["mqtt"],
+  "mqtt": ["jetkvm/+/network/state"],
+  "version": "0.1.0"
+}
