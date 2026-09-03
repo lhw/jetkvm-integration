@@ -64,6 +64,19 @@ def test_text_to_keys_ascii():
     assert _text_to_keys("é") == []
 
 
+def test_resolve_key():
+    """Named keys, single chars, and decimal strings resolve to HID codes."""
+    from custom_components.jetkvm.coordinator import resolve_key
+
+    assert resolve_key("F1") == 0x3A
+    assert resolve_key("f10") == 0x44
+    assert resolve_key("ENTER") == 0x28
+    assert resolve_key("56") == 56
+    assert resolve_key(0x4C) == 0x4C
+    with pytest.raises(ValueError):
+        resolve_key("NOTAKIEY")
+
+
 def test_static_contracts():
     """Manifest/HACS/strings stay valid and in sync with the flow."""
     import json

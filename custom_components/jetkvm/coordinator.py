@@ -334,6 +334,48 @@ _TEXT_MAP.update(
     {" ": (44, False), "\n": (40, False), "-": (45, False), "=": (46, False)}
 )
 
+# Named keys → USB HID usage IDs (press/release combos like F-keys, Enter, arrows).
+_NAMED_KEYS: dict[str, int] = {
+    "F1": 0x3A,
+    "F2": 0x3B,
+    "F3": 0x3C,
+    "F4": 0x3D,
+    "F5": 0x3E,
+    "F6": 0x3F,
+    "F7": 0x40,
+    "F8": 0x41,
+    "F9": 0x42,
+    "F10": 0x44,
+    "F11": 0x45,
+    "F12": 0x46,
+    "ENTER": 0x28,
+    "ESC": 0x29,
+    "TAB": 0x2B,
+    "DEL": 0x4C,
+    "BACKSPACE": 0x2A,
+    "UP": 0x52,
+    "DOWN": 0x51,
+    "LEFT": 0x50,
+    "RIGHT": 0x4F,
+    "CTRL": 0xE0,
+    "ALT": 0xE2,
+    "SHIFT": 0xE1,
+}
+
+
+def resolve_key(key: str | int) -> int:
+    """Resolve a key name (e.g. 'F1', 'ENTER') or a HID code to an int."""
+    if isinstance(key, int):
+        return key
+    upper = str(key).strip().upper()
+    if upper in _NAMED_KEYS:
+        return _NAMED_KEYS[upper]
+    if upper.isdigit():
+        return int(upper)
+    if upper in _TEXT_MAP and len(upper) == 1:
+        return _TEXT_MAP[upper][0]
+    raise ValueError(f"Unknown key: {key}")
+
 
 def _text_to_keys(text: str) -> list[tuple[int, bool | None, bool]]:
     """Map text to (hid_key, press, release_after) steps. Unknown chars skipped."""

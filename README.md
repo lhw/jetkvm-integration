@@ -7,6 +7,8 @@ what MQTT can't: **screen image + text-to-keyboard** via the device's WebRTC API
 - **Screen camera** — still image captured on demand (dashboard view, `camera.snapshot`
   service) plus native live view (WebRTC passthrough), each via an ephemeral device session.
 - **Type text** — text entity types ASCII on the host (`keypressReport`).
+- **`jetkvm.send_keys` service** — press/release named keys (F1, F10, ENTER, …)
+  or decimal HID codes; used for macros/sequences from automations.
 - **Buttons** — Ctrl+Alt+Del + Wake-on-LAN (`POST /device/send-wol/:mac`).
 - **One diagnostic sensor** — device ID. Everything else stays in MQTT to avoid duplicates.
 

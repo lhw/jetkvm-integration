@@ -1,0 +1,32 @@
+send_keys:
+  name: Send keys
+  description: Type a sequence of keys (named like F1/F10 or decimal HID codes) on the host.
+  fields:
+    keys:
+      name: Keys
+      description: List of keys to press and release, e.g. ["F1"].
+      example: ["F1", "F10"]
+      required: true
+      selector:
+        text:
+    modifier:
+      name: Modifier
+      description: USB HID modifier byte (e.g. 0 for none).
+      default: 0
+      required: false
+      selector:
+        number:
+          min: 0
+          max: 255
+          mode: box
+    delay:
+      name: Delay
+      description: Seconds to pause between keys.
+      default: 0.05
+      required: false
+      selector:
+        number:
+          min: 0
+          max: 10
+          step: 0.01
+          mode: box
