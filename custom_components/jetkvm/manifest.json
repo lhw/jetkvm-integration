@@ -7,7 +7,7 @@
   "issue_tracker": "https://github.com/lhw/jetkvm-integration/issues",
   "iot_class": "local_polling",
   "loggers": ["jetkvm"],
-  "requirements": ["aiortc @ git+https://github.com/lhw/aiortc@134fe469953ee8ddbc0d26df923b6f6b4abe0a7a"],
+  "requirements": ["aiortc @ git+https://github.com/lhw/jetkvm-integration@a250b389f7966a685eb745b9f67c945770a5ff3c#subdirectory=vendor/aiortc"],
   "dependencies": ["mqtt"],
   "mqtt": ["jetkvm/+/network/state"],
   "version": "0.1.0"

@@ -33,21 +33,22 @@ Settings → Devices & Services → Add Integration → JetKVM: host (e.g. `http
 password, optional WOL MAC, polling interval for device availability
 (min 10s, default 30s).
 
-If the JetKVM already reports to your MQTT broker with HA discovery enabled,
-the integration is discovered automatically: the retained
-`homeassistant/sensor/jetkvm_<id>/ip_address/config` message carries the device
-IP, so the flow only asks for the device password. Either way our entities join
-the *same* device card as the MQTT entities (shared `mqtt` identifier) —
-nothing is duplicated.
+If the JetKVM already reports to your MQTT broker, the integration is
+discovered automatically: it subscribes to the device's own retained
+`jetkvm/<id>/network/state` topic and reads the host IP from it, so the flow
+only asks for the device password. Either way our entities join the *same*
+device card as the MQTT entities (shared `mqtt` identifier) — nothing is
+duplicated.
 
 ## Notes
 
-The integration depends on a lightly-patched [aiortc](https://github.com/lhw/aiortc)
-(`av` upper-pin relaxed to `<20`). HA 2026.10 pins `av==19.0.0` for every
-integration, while stock aiortc declares `av<18` (a conservative pin — aiortc
-1.15.0 runs fine on av 19), so a plain PyPI requirement is unsatisfiable. The
-manifest therefore installs aiortc from that fork by commit SHA; drop the fork
-and go back to `aiortc==1.15.0` once upstream allows av 19.
+The integration depends on a lightly-patched **aiortc** vendored in this repo at
+[`vendor/aiortc`](vendor/aiortc) (the `av` upper-pin relaxed to `<20`). HA
+2026.10 pins `av==19.0.0` for every integration, while stock aiortc declares
+`av<18` — a conservative pin, since aiortc 1.15.0 runs fine on av 19 — so a
+plain PyPI requirement is unsatisfiable. The manifest installs it from this
+repo's `vendor/aiortc` subdirectory. When upstream aiortc allows av 19, delete
+`vendor/` and go back to a normal `aiortc` requirement.
 
 ## Development
 
