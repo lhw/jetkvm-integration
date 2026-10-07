@@ -4,8 +4,9 @@ Auth (verified live): POST /auth/login-local {"password"} sets a session cookie.
 **Each login revokes the previous token** (verified: token1 → 401 after a token2
 login), so the coordinator caches ONE token and re-auths lazily only on 401 —
 otherwise the /device poll and screenshot/offer calls rotate and revoke each
-other's tokens. Video/keys go over WebRTC: POST /webrtc/session exchanges a
-base64 offer/answer, keys are JSON-RPC on the `rpc` DataChannel.
+other's tokens. Video/keys go over WebRTC, signaled over the device's
+``ws://…/webrtc/signaling/client`` WebSocket (newer firmware removed the legacy
+HTTP ``/webrtc/session`` endpoint); keys are JSON-RPC on the `rpc` DataChannel.
 """
 
 from __future__ import annotations
@@ -15,6 +16,7 @@ import base64
 import io
 import json
 import logging
+from contextlib import suppress
 from datetime import timedelta
 from http.cookies import SimpleCookie
 from typing import Any
@@ -29,6 +31,62 @@ from .const import CONF_HOST, CONF_PASSWORD, CONF_SCAN_INTERVAL, DEFAULT_SCAN_IN
 
 LOGGER = logging.getLogger(__package__)
 CLIENT_TIMEOUT = aiohttp.ClientTimeout(total=10, sock_connect=3)
+
+
+def _signaling_url(base_url: str) -> str:
+    """Return the device WebSocket signaling URL.
+
+    Newer firmware dropped the legacy HTTP ``/webrtc/session`` endpoint; all
+    signaling now goes over this WebSocket.
+    """
+    if base_url.startswith("https://"):
+        return "wss://" + base_url[len("https://") :] + "/webrtc/signaling/client"
+    return "ws://" + base_url.split("://", 1)[-1] + "/webrtc/signaling/client"
+
+
+class _WebRTCSession:
+    """A live WebRTC session: peer connection + signaling WS + background tasks."""
+
+    def __init__(self, pc, ws, reader: asyncio.Task, ping: asyncio.Task) -> None:
+        self.pc = pc
+        self.ws = ws
+        self._tasks = (reader, ping)
+
+    async def aclose(self) -> None:
+        for task in self._tasks:
+            task.cancel()
+        for task in self._tasks:
+            with suppress(asyncio.CancelledError):
+                await task
+        await self.ws.close()
+        await self.pc.close()
+
+
+async def _send_candidate(ws: aiohttp.ClientWebSocketResponse, candidate) -> None:
+    """Send a local ICE candidate to the device over the signaling WS."""
+    from aiortc.sdp import candidate_to_sdp
+
+    with suppress(aiohttp.ClientError):
+        await ws.send_json(
+            {
+                "type": "new-ice-candidate",
+                "data": {
+                    "candidate": candidate_to_sdp(candidate),
+                    "sdpMid": candidate.sdpMid,
+                    "sdpMLineIndex": candidate.sdpMLineIndex,
+                },
+            }
+        )
+
+
+async def _keepalive(ws: aiohttp.ClientWebSocketResponse) -> None:
+    """Ping the signaling WS so the device keeps the session open."""
+    try:
+        while True:
+            await asyncio.sleep(15)
+            await ws.send_str("ping")
+    except (aiohttp.ClientError, asyncio.CancelledError):
+        pass
 
 
 async def login_token(
@@ -149,27 +207,77 @@ class JetKVMCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 return await resp.json()
         return {}
 
-    async def exchange_offer(self, offer_sdp: str) -> str:
-        """Exchange a client offer for the device answer (token cached + retry)."""
-        payload = base64.b64encode(
-            json.dumps({"type": "offer", "sdp": offer_sdp}).encode()
-        ).decode()
-        for attempt in (0, 1):
-            async with self.session.post(
-                self.base_url + "/webrtc/session",
-                headers=await self._headers(),
-                json={"sd": payload},
-                timeout=CLIENT_TIMEOUT,
-            ) as resp:
-                if resp.status == 401 and attempt == 0:
-                    await self._revalidate()
-                    continue
-                resp.raise_for_status()
-                answer = json.loads(
-                    base64.b64decode((await resp.json())["sd"]).decode()
-                )
-                return answer["sdp"]
-        raise UpdateFailed("JetKVM could not establish a WebRTC session")
+    async def ws_connect_signaling(self) -> aiohttp.ClientWebSocketResponse:
+        """Connect the device's WebSocket signaling channel (auth cookie)."""
+        return await self.session.ws_connect(
+            _signaling_url(self.base_url),
+            headers=await self._headers(),
+            timeout=CLIENT_TIMEOUT,
+        )
+
+    async def connect(self, pc) -> _WebRTCSession:
+        """Signaling over the device WebSocket; returns a session to keep open.
+
+        Sends a full (non-trickle) offer so our ICE candidates ride in the SDP,
+        and adds the device's trickled candidates as they arrive.
+        """
+        from aiortc import RTCSessionDescription
+        from aiortc.sdp import candidate_from_sdp
+
+        ws = await self.ws_connect_signaling()
+        answer: asyncio.Future = asyncio.get_running_loop().create_future()
+
+        @pc.on("icecandidate")
+        def _on_ice(event) -> None:
+            if event.candidate is not None:
+                asyncio.ensure_future(_send_candidate(ws, event.candidate))
+
+        async def _reader() -> None:
+            try:
+                async for msg in ws:
+                    if msg.type != aiohttp.WSMsgType.TEXT or msg.data == "pong":
+                        continue
+                    try:
+                        payload = json.loads(msg.data)
+                    except ValueError:
+                        continue
+                    kind = payload.get("type")
+                    if kind == "answer" and not answer.done():
+                        answer.set_result(payload["data"])
+                    elif kind == "new-ice-candidate":
+                        data = payload.get("data") or {}
+                        sdp = data.get("candidate")
+                        if sdp:
+                            candidate = candidate_from_sdp(sdp)
+                            candidate.sdpMid = data.get("sdpMid")
+                            candidate.sdpMLineIndex = data.get("sdpMLineIndex")
+                            await pc.addIceCandidate(candidate)
+            except (aiohttp.ClientError, asyncio.CancelledError):
+                pass
+
+        reader = asyncio.ensure_future(_reader())
+        try:
+            offer = await pc.createOffer()
+            await pc.setLocalDescription(offer)
+            while pc.iceGatheringState != "complete":  # noqa: ASYNC110 (ICE gather poll)
+                await asyncio.sleep(0.05)
+            payload = base64.b64encode(
+                json.dumps({"type": "offer", "sdp": pc.localDescription.sdp}).encode()
+            ).decode()
+            await ws.send_json({"type": "offer", "data": {"sd": payload}})
+            answer_b64 = await asyncio.wait_for(answer, timeout=15)
+            answer_sdp = json.loads(base64.b64decode(answer_b64).decode())
+            await pc.setRemoteDescription(
+                RTCSessionDescription(sdp=answer_sdp["sdp"], type=answer_sdp["type"])
+            )
+        except Exception:
+            reader.cancel()
+            with suppress(asyncio.CancelledError):
+                await reader
+            await ws.close()
+            raise
+        ping = asyncio.ensure_future(_keepalive(ws))
+        return _WebRTCSession(pc, ws, reader, ping)
 
 
 def create_coordinators(hass: HomeAssistant, entry: ConfigEntry) -> dict[str, Any]:
@@ -183,38 +291,42 @@ def create_coordinators(hass: HomeAssistant, entry: ConfigEntry) -> dict[str, An
 
 async def _fetch_screenshot_stream(coord: JetKVMCoordinator) -> bytes:
     """Grab one JPEG via an ephemeral WebRTC session."""
-    from aiortc import RTCPeerConnection, RTCSessionDescription
+    from aiortc import RTCPeerConnection
 
     pc = RTCPeerConnection()
+    frames: asyncio.Queue = asyncio.Queue(maxsize=1)
+
+    # Register BEFORE the offer/answer: aiortc emits "track" during
+    # setRemoteDescription, and a later listener would miss it forever.
+    @pc.on("track")
+    def on_track(track):
+        async def recv() -> None:
+            while True:
+                frame = await track.recv()
+                if frames.empty():
+                    frames.put_nowait(frame)
+                    return
+
+        asyncio.ensure_future(recv())  # noqa: RUF006 (fire-and-forget reader)
+
+    # The JetKVM encodes H264; pin the transceiver to H264 so the answer
+    # doesn't negotiate VP8 (which would never decode).
+    from aiortc import RTCRtpReceiver
+
+    transceiver = pc.addTransceiver("video")
+    transceiver.setCodecPreferences(
+        [
+            codec
+            for codec in RTCRtpReceiver.getCapabilities("video").codecs
+            if codec.mimeType.lower() == "video/h264"
+        ]
+    )
+    session = await coord.connect(pc)
     try:
-        frames: asyncio.Queue = asyncio.Queue(maxsize=1)
-
-        # Register BEFORE setRemoteDescription: aiortc emits "track" during
-        # that call, and a later listener would miss it forever.
-        @pc.on("track")
-        def on_track(track):
-            async def recv() -> None:
-                while True:
-                    frame = await track.recv()
-                    if frames.empty():
-                        frames.put_nowait(frame)
-                        return
-
-            asyncio.ensure_future(recv())  # noqa: RUF006 (fire-and-forget reader)
-
-        pc.addTransceiver("video")
-        offer = await pc.createOffer()
-        await pc.setLocalDescription(offer)
-        while pc.iceGatheringState != "complete":  # noqa: ASYNC110 (ICE gather poll)
-            await asyncio.sleep(0.05)
-        answer_sdp = await coord.exchange_offer(pc.localDescription.sdp)
-        await pc.setRemoteDescription(
-            RTCSessionDescription(sdp=answer_sdp, type="answer")
-        )
-        frame = await asyncio.wait_for(frames.get(), timeout=15)
+        frame = await asyncio.wait_for(frames.get(), timeout=20)
         return _encode_jpeg(frame)
     finally:
-        await pc.close()
+        await session.aclose()
 
 
 def _encode_jpeg(frame) -> bytes:
@@ -230,8 +342,8 @@ async def fetch_screenshot(coord: JetKVMCoordinator) -> bytes:
 
 
 async def _webrtc_rpc_channel(coord: JetKVMCoordinator):
-    """Open an ephemeral WebRTC session, return (pc, open rpc channel)."""
-    from aiortc import RTCPeerConnection, RTCSessionDescription
+    """Open an ephemeral WebRTC session, return (session, open rpc channel)."""
+    from aiortc import RTCPeerConnection
 
     pc = RTCPeerConnection()
     chan = pc.createDataChannel("rpc")
@@ -241,14 +353,13 @@ async def _webrtc_rpc_channel(coord: JetKVMCoordinator):
     def on_open() -> None:
         ready.set()
 
-    offer = await pc.createOffer()
-    await pc.setLocalDescription(offer)
-    while pc.iceGatheringState != "complete":  # noqa: ASYNC110 (ICE gather poll)
-        await asyncio.sleep(0.05)
-    answer_sdp = await coord.exchange_offer(pc.localDescription.sdp)
-    await pc.setRemoteDescription(RTCSessionDescription(sdp=answer_sdp, type="answer"))
-    await asyncio.wait_for(ready.wait(), timeout=10)
-    return pc, chan
+    session = await coord.connect(pc)
+    try:
+        await asyncio.wait_for(ready.wait(), timeout=10)
+    except Exception:
+        await session.aclose()
+        raise
+    return session, chan
 
 
 async def send_text(coord: JetKVMCoordinator, text: str) -> None:
@@ -265,7 +376,7 @@ async def _send_key_steps(
     coord: JetKVMCoordinator, steps: list[tuple[int, bool | None, bool]]
 ) -> None:
     """Send keypressReport steps over an ephemeral WebRTC rpc channel."""
-    pc, chan = await _webrtc_rpc_channel(coord)
+    session, chan = await _webrtc_rpc_channel(coord)
     try:
         msg_id = 0
         for key, press, release_after in steps:
@@ -290,7 +401,7 @@ async def _send_keyboard_report(
     coord: JetKVMCoordinator, modifier: int, keys: list[int]
 ) -> None:
     """Send one keyboardReport press + release (for combos like Ctrl+Alt+Del)."""
-    pc, chan = await _webrtc_rpc_channel(coord)
+    session, chan = await _webrtc_rpc_channel(coord)
     try:
         for mod, ks in ((modifier, keys), (0, [])):
             chan.send(
@@ -305,7 +416,7 @@ async def _send_keyboard_report(
             )
             await asyncio.sleep(0.05)
     finally:
-        await pc.close()
+        await session.aclose()
 
 
 async def wake_host(coord: JetKVMCoordinator, mac: str) -> None:
