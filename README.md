@@ -40,6 +40,15 @@ IP, so the flow only asks for the device password. Either way our entities join
 the *same* device card as the MQTT entities (shared `mqtt` identifier) —
 nothing is duplicated.
 
+## Notes
+
+The integration depends on a lightly-patched [aiortc](https://github.com/lhw/aiortc)
+(`av` upper-pin relaxed to `<20`). HA 2026.10 pins `av==19.0.0` for every
+integration, while stock aiortc declares `av<18` (a conservative pin — aiortc
+1.15.0 runs fine on av 19), so a plain PyPI requirement is unsatisfiable. The
+manifest therefore installs aiortc from that fork by commit SHA; drop the fork
+and go back to `aiortc==1.15.0` once upstream allows av 19.
+
 ## Development
 
 ```bash
